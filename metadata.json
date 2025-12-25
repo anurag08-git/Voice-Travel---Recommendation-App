@@ -1,0 +1,8 @@
+{
+  "name": "VibeTravel: Immersive Journey Discovery",
+  "description": "A voice-first, AI-powered travel experience app that helps you 'feel' a destination before you visit. Designed for all ages with a focus on emotion-led exploration and accessibility.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
