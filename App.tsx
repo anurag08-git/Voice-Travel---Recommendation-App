@@ -64,6 +64,7 @@ const App: React.FC = () => {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [transcription, setTranscription] = useState('');
   const [isListening, setIsListening] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
 
   // Audio Refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -107,7 +108,6 @@ const App: React.FC = () => {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
         outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
         
-        // Ensure context is running
         if (audioContextRef.current.state === 'suspended') {
             await audioContextRef.current.resume();
         }
@@ -122,19 +122,17 @@ const App: React.FC = () => {
             console.log('Session Opened');
             setIsListening(true);
             
-            // Kickstart: Send a brief silence to initialize the audio stream and prompt the model to speak
-            // Sending text/plain via sendRealtimeInput is NOT supported and causes "Invalid Argument" errors.
+            // Kickstart silence
             sessionPromiseRef.current?.then(session => {
                 const silence = new Float32Array(1600); // 0.1s silence
                 session.sendRealtimeInput({ media: createBlob(silence) });
             });
 
-            // Audio Input Setup
             const source = audioContextRef.current!.createMediaStreamSource(stream);
-            // Keep reference to prevent GC
             scriptProcessorRef.current = audioContextRef.current!.createScriptProcessor(4096, 1, 1);
             
             scriptProcessorRef.current.onaudioprocess = (e) => {
+                if (isMuted) return; // Mute Logic
                 const inputData = e.inputBuffer.getChannelData(0);
                 const pcmBlob = createBlob(inputData);
                 sessionPromiseRef.current?.then(session => {
@@ -146,7 +144,6 @@ const App: React.FC = () => {
             scriptProcessorRef.current.connect(audioContextRef.current!.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
-            // Handle Transcription
             if (message.serverContent?.outputTranscription) {
                 setTranscription(prev => prev + message.serverContent?.outputTranscription?.text);
             } else if (message.serverContent?.inputTranscription) {
@@ -157,7 +154,6 @@ const App: React.FC = () => {
                 setTranscription('');
             }
 
-            // Handle Audio Playback
             const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
             if (base64Audio) {
                 const outCtx = outputAudioContextRef.current!;
@@ -178,7 +174,6 @@ const App: React.FC = () => {
                 nextStartTimeRef.current = 0;
             }
 
-            // Handle Tool Calls
             if (message.toolCall) {
                 for (const fc of message.toolCall.functionCalls) {
                 if (fc.name === 'showExperience') {
@@ -263,15 +258,33 @@ const App: React.FC = () => {
     }
   };
 
+  const sendTextCommand = (text: string) => {
+    sessionPromiseRef.current?.then((session: any) => {
+      // Direct client content injection for interaction
+      if (session.send) {
+        session.send({
+          clientContent: {
+            turns: [{ role: 'user', parts: [{ text }] }],
+            turnComplete: true
+          }
+        });
+        setTranscription(`(You): ${text}`);
+      } else {
+        alert("Voice connection active. Please speak your request.");
+      }
+    });
+  };
+
   const handleNextExperience = () => {
-    // We cannot easily send text commands in the Live API without 'turns' support which is complex to construct manually here.
-    // We rely on the user to speak.
-    alert("Please say 'Show me something else' or 'Next'!");
+    sendTextCommand("Show me a different destination with a different vibe.");
   };
 
   const handleConfirmInterest = () => {
-    // We rely on the user to speak.
-    alert("Please say 'I love this' or 'Plan this'!");
+    sendTextCommand("I love this place! Plan the details for me.");
+  };
+
+  const toggleMute = () => {
+    setIsMuted(!isMuted);
   };
 
   // Cleanup on unmount
@@ -294,7 +307,7 @@ const App: React.FC = () => {
           </div>
           <button 
             onClick={startSession}
-            className="group relative bg-orange-500 text-white px-16 py-8 rounded-full text-3xl font-bold shadow-2xl hover:scale-105 transition-all duration-300 active:scale-95"
+            className="group relative bg-orange-500 text-white px-16 py-8 rounded-full text-3xl font-bold shadow-2xl hover:scale-105 transition-all duration-300 active:scale-95 cursor-pointer"
           >
             <span className="relative z-10">Say Namaste</span>
             <div className="absolute inset-0 bg-orange-400 rounded-full blur-xl group-hover:blur-2xl transition-all opacity-40"></div>
@@ -331,23 +344,33 @@ const App: React.FC = () => {
         />
       )}
 
-      {/* Persistent Voice Feedback */}
+      {/* Persistent Voice Feedback & Controls */}
       {isSessionActive && (
         <div className="fixed top-8 left-1/2 -translate-x-1/2 z-50 w-full max-w-lg px-4">
-          <div className="glass-card bg-white/60 backdrop-blur-xl border border-white/40 p-6 rounded-full shadow-2xl flex items-center gap-6">
-            <div className="relative">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors duration-300 ${isListening ? 'bg-orange-500 animate-bounce' : 'bg-gray-400'}`}>
-                <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                </svg>
+          <div className="glass-card bg-white/60 backdrop-blur-xl border border-white/40 p-4 pl-6 pr-4 rounded-full shadow-2xl flex items-center gap-6">
+            <div className="relative group cursor-pointer" onClick={toggleMute}>
+              <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-lg transition-colors duration-300 ${isMuted ? 'bg-red-500' : (isListening ? 'bg-orange-500 animate-bounce' : 'bg-gray-400')}`}>
+                {isMuted ? (
+                   <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                     <line x1="1" y1="1" x2="23" y2="23" stroke="white" strokeWidth={2} />
+                   </svg>
+                ) : (
+                   <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                   </svg>
+                )}
               </div>
-              <div className={`absolute -inset-1 rounded-full ${isListening ? 'bg-orange-500/20 animate-ping' : ''}`}></div>
+              <div className={`absolute -inset-1 rounded-full ${!isMuted && isListening ? 'bg-orange-500/20 animate-ping' : ''}`}></div>
             </div>
             <div className="flex-1 overflow-hidden">
                <p className="text-xl font-bold text-stone-800 truncate">
-                {transcription || (isListening ? "I'm listening..." : "Connecting...")}
+                {transcription || (isMuted ? "Mic Muted" : "Listening...")}
                </p>
-               <p className="text-sm text-stone-500 font-semibold uppercase tracking-widest">VibeTravel Live</p>
+               <p className="text-sm text-stone-500 font-semibold uppercase tracking-widest flex items-center gap-2">
+                 VibeTravel Live
+                 <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+               </p>
             </div>
           </div>
         </div>
